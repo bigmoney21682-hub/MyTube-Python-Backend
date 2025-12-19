@@ -1,17 +1,19 @@
 # File: main.py
-# Path: / (root of your backend project)
+# Path: / (root of backend project)
 
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, Request
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
-import httpx
+import yt_dlp
+import os
 
 app = FastAPI()
 
 # -----------------------------
-# CORS Setup
+# CORS: allow your frontend
 # -----------------------------
 origins = [
-    "https://bigmoney21682-hub.github.io",  # <- Your frontend
+    "https://bigmoney21682-hub.github.io"
 ]
 
 app.add_middleware(
@@ -23,43 +25,29 @@ app.add_middleware(
 )
 
 # -----------------------------
-# Health Check
+# API route example
 # -----------------------------
-@app.get("/ping")
-def ping():
-    return {"message": "pong"}
+@app.get("/api/trending")
+async def trending(region: str = "US"):
+    try:
+        # Example using yt-dlp to get trending videos (placeholder)
+        ydl_opts = {"extract_flat": True}
+        url = f"https://www.youtube.com/feed/trending?gl={region}"
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+        return JSONResponse(content=info)
+    except Exception as e:
+        return JSONResponse(content={"error": str(e)}, status_code=500)
 
 # -----------------------------
-# Piped API Proxy Endpoints
+# Serve frontend files
 # -----------------------------
-PIPED_BASE = "https://pipedapi.kavin.rocks"
+frontend_path = os.path.dirname(__file__)
 
-@app.get("/trending")
-async def trending(region: str = Query("US")):
-    """
-    Proxy trending videos from Piped API
-    """
-    async with httpx.AsyncClient() as client:
-        response = await client.get(f"{PIPED_BASE}/trending?region={region}")
-        response.raise_for_status()
-        return response.json()
-
-@app.get("/search")
-async def search(query: str, region: str = Query("US")):
-    """
-    Proxy search results from Piped API
-    """
-    async with httpx.AsyncClient() as client:
-        response = await client.get(f"{PIPED_BASE}/search", params={"q": query, "region": region})
-        response.raise_for_status()
-        return response.json()
-
-@app.get("/video")
-async def video(id: str):
-    """
-    Proxy video details from Piped API
-    """
-    async with httpx.AsyncClient() as client:
-        response = await client.get(f"{PIPED_BASE}/video/{id}")
-        response.raise_for_status()
-        return response.json()
+@app.get("/{full_path:path}")
+async def serve_frontend(full_path: str, request: Request):
+    requested_file = os.path.join(frontend_path, full_path)
+    if os.path.isfile(requested_file):
+        return FileResponse(requested_file)
+    # Fallback: serve index.html for SPA
+    return FileResponse(os.path.join(frontend_path, "index.html"))
