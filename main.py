@@ -19,6 +19,21 @@ app.add_middleware(
 def root():
     return {"status": "MyTube backend running"}
 
+@app.get("/search")
+async def search(q: str):
+    return {
+        "items": []
+    }
+
+@app.get("/streams/{video_id}")
+async def streams(video_id: str):
+    return {
+        "title": "Placeholder",
+        "uploaderName": "Unknown",
+        "views": 0,
+        "videoStreams": [],
+        "relatedStreams": []
+    }
 # -------------------- TRENDING --------------------
 @app.get("/trending")
 def trending():
