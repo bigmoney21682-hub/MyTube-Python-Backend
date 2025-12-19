@@ -1,77 +1,57 @@
-# File: main.py
-# Path: /main.py
-
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-import httpx
+import subprocess
+import json
 
-# -----------------------------
-# App
-# -----------------------------
 app = FastAPI()
 
-# -----------------------------
-# CORS (CRITICAL FIX)
-# -----------------------------
+# -------------------- CORS --------------------
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "https://bigmoney21682-hub.github.io",
-    ],
+    allow_origins=["https://bigmoney21682-hub.github.io"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# -----------------------------
-# Upstream API (Piped)
-# -----------------------------
-PIPED_API = "https://pipedapi.kavin.rocks"
-
-client = httpx.AsyncClient(timeout=20)
-
-# -----------------------------
-# Health check
-# -----------------------------
+# -------------------- ROOT --------------------
 @app.get("/")
-async def root():
-    return {"status": "ok"}
+def root():
+    return {"status": "MyTube backend running"}
 
-# -----------------------------
-# Trending
-# -----------------------------
+# -------------------- TRENDING --------------------
 @app.get("/trending")
-async def trending(region: str = "US"):
+def trending():
     try:
-        r = await client.get(f"{PIPED_API}/trending", params={"region": region})
-        r.raise_for_status()
-        return r.json()
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        cmd = [
+            "yt-dlp",
+            "--dump-json",
+            "https://www.youtube.com/feed/trending"
+        ]
 
-# -----------------------------
-# Search
-# -----------------------------
-@app.get("/search")
-async def search(q: str, filter: str = "videos"):
-    try:
-        r = await client.get(
-            f"{PIPED_API}/search",
-            params={"q": q, "filter": filter},
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True
         )
-        r.raise_for_status()
-        return r.json()
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
 
-# -----------------------------
-# Streams
-# -----------------------------
-@app.get("/streams/{video_id}")
-async def streams(video_id: str):
-    try:
-        r = await client.get(f"{PIPED_API}/streams/{video_id}")
-        r.raise_for_status()
-        return r.json()
+        videos = []
+        for line in proc.stdout:
+            try:
+                data = json.loads(line)
+                videos.append({
+                    "id": data.get("id"),
+                    "title": data.get("title"),
+                    "thumbnail": f"https://i.ytimg.com/vi/{data.get('id')}/hqdefault.jpg",
+                    "uploaderName": data.get("uploader"),
+                    "views": data.get("view_count"),
+                    "duration": data.get("duration"),
+                })
+            except Exception:
+                continue
+
+        return videos[:25]
+
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        return {"error": str(e)}
