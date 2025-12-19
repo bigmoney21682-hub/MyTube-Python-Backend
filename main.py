@@ -1,6 +1,12 @@
+# File: main.py
+
 from fastapi import FastAPI
-from app.routes import router
 
-app = FastAPI(title="MyTube Python Backend")
+app = FastAPI()
 
-app.include_router(router)
+# Root endpoint for testing
+@app.get("/")
+async def root():
+    return {"message": "MyTube backend is live!"}
+
+# Example: add more endpoints here for search, streams, etc.
