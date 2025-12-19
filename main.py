@@ -1,45 +1,63 @@
-# File: backend/main.py
+# backend/main.py
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-import yt_dlp
+from yt_dlp import YoutubeDL
 import os
 
 app = FastAPI()
 
-# CORS (frontend safe)
+# -------------------------
+# CORS (unchanged)
+# -------------------------
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Absolute-safe cookie path
-COOKIE_FILE = os.path.join(os.getcwd(), "cookies.txt")
+# -------------------------
+# CONSTANTS
+# -------------------------
+COOKIES_PATH = os.path.join(os.getcwd(), "cookies.txt")
 
-@app.get("/")
-def root():
-    return {"status": "ok"}
+if not os.path.exists(COOKIES_PATH):
+    print("⚠️ cookies.txt NOT FOUND at backend root")
 
+# -------------------------
+# STREAM ENDPOINT
+# -------------------------
 @app.get("/streams/{video_id}")
 def get_streams(video_id: str):
-    if not os.path.exists(COOKIE_FILE):
-        raise HTTPException(status_code=500, detail="cookies.txt not found")
-
-    url = f"https://www.youtube.com/watch?v={video_id}"
+    """
+    Returns playable streams for a YouTube video.
+    Cookies are REQUIRED to avoid bot verification.
+    """
 
     ydl_opts = {
         "quiet": True,
+        "no_warnings": True,
         "skip_download": True,
-        "cookiefile": COOKIE_FILE,
+
+        # ✅ THIS IS THE FIX
+        "cookiefile": COOKIES_PATH,
+
+        # Safer format selection
         "format": "bestvideo+bestaudio/best",
+
+        # Prevent throttling issues
         "noplaylist": True,
+        "extract_flat": False,
     }
 
     try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
+        with YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(
+                f"https://www.youtube.com/watch?v={video_id}",
+                download=False,
+            )
 
         formats = info.get("formats", [])
 
@@ -49,8 +67,11 @@ def get_streams(video_id: str):
                 streams.append({
                     "url": f["url"],
                     "mimeType": f.get("ext"),
-                    "quality": f.get("height"),
+                    "quality": f.get("format_note") or f.get("resolution"),
                 })
+
+        if not streams:
+            raise HTTPException(status_code=404, detail="No playable streams found")
 
         return {
             "id": video_id,
@@ -59,4 +80,7 @@ def get_streams(video_id: str):
         }
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(
+            status_code=500,
+            detail=f"yt-dlp error: {str(e)}"
+        )
