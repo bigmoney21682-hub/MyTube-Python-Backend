@@ -1,53 +1,62 @@
-from fastapi import FastAPI
-from fastapi.responses import JSONResponse
-from typing import List
+# File: backend/main.py
 
-app = FastAPI(title="MyTube Python Backend")
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+import yt_dlp
+import os
 
-# Curated playlist for testing
-CURATED_PLAYLIST = [
-    {
-        "title": "Rick Astley - Never Gonna Give You Up",
-        "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
-        "uploaderName": "Rick Astley",
-        "views": 123456789,
-        "duration": "3:33"
-    },
-    {
-        "title": "Coldplay - Viva La Vida",
-        "url": "https://www.youtube.com/watch?v=3JZ_D3ELwOQ",
-        "uploaderName": "Coldplay",
-        "views": 98765432,
-        "duration": "4:12"
-    },
-    {
-        "title": "Daft Punk - One More Time",
-        "url": "https://www.youtube.com/watch?v=FGBhQbmPwH8",
-        "uploaderName": "Daft Punk",
-        "views": 87654321,
-        "duration": "5:20"
+app = FastAPI()
+
+# CORS (frontend safe)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Absolute-safe cookie path
+COOKIE_FILE = os.path.join(os.getcwd(), "cookies.txt")
+
+@app.get("/")
+def root():
+    return {"status": "ok"}
+
+@app.get("/streams/{video_id}")
+def get_streams(video_id: str):
+    if not os.path.exists(COOKIE_FILE):
+        raise HTTPException(status_code=500, detail="cookies.txt not found")
+
+    url = f"https://www.youtube.com/watch?v={video_id}"
+
+    ydl_opts = {
+        "quiet": True,
+        "skip_download": True,
+        "cookiefile": COOKIE_FILE,
+        "format": "bestvideo+bestaudio/best",
+        "noplaylist": True,
     }
-]
 
-@app.get("/trending")
-async def trending(region: str = "US"):
-    """
-    Returns a curated playlist JSON for testing purposes.
-    """
-    # Currently ignoring region, can be used later
-    return JSONResponse(content=CURATED_PLAYLIST)
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
 
+        formats = info.get("formats", [])
 
-@app.get("/search")
-async def search(q: str):
-    """
-    Dummy search endpoint returning placeholder JSON.
-    """
-    result = {
-        "title": f"Search result for '{q}'",
-        "uploaderName": "Unknown",
-        "views": 0,
-        "videoStreams": [],
-        "relatedStreams": []
-    }
-    return JSONResponse(content=result)
+        streams = []
+        for f in formats:
+            if f.get("url") and f.get("vcodec") != "none":
+                streams.append({
+                    "url": f["url"],
+                    "mimeType": f.get("ext"),
+                    "quality": f.get("height"),
+                })
+
+        return {
+            "id": video_id,
+            "title": info.get("title"),
+            "streams": streams,
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
