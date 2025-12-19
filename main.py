@@ -1,106 +1,89 @@
 # File: main.py
-
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from typing import List, Dict
 import yt_dlp
 
-app = FastAPI(title="MyTube Python Backend")
+app = FastAPI(title="MyTube Python Backend", version="1.0")
 
-# Allow all origins for frontend access
+# ---------------------------
+# CORS Configuration
+# ---------------------------
+allowed_origins = [
+    "http://localhost:5173",  # local frontend
+    "https://mytube-frontend.onrender.com",  # live frontend
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Root route for testing
+# ---------------------------
+# Utility functions
+# ---------------------------
+def extract_video_info(url: str) -> Dict:
+    """
+    Extracts video information using yt-dlp.
+    """
+    ydl_opts = {
+        "format": "best",
+        "quiet": True,
+        "skip_download": True,
+    }
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        try:
+            info = ydl.extract_info(url, download=False)
+            return {
+                "id": info.get("id"),
+                "title": info.get("title"),
+                "uploader": info.get("uploader"),
+                "duration": info.get("duration"),
+                "thumbnail": info.get("thumbnail"),
+                "webpage_url": info.get("webpage_url"),
+            }
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+# ---------------------------
+# API Endpoints
+# ---------------------------
 @app.get("/")
 async def root():
     return {"message": "MyTube backend is live!"}
 
-
-# -----------------------------
-# Helper function for yt-dlp
-# -----------------------------
-def ytdlp_extract_info(url: str, download: bool = False):
+@app.get("/search")
+async def search_videos(query: str):
+    """
+    Search YouTube for videos using yt-dlp.
+    """
     ydl_opts = {
-        "format": "best",
         "quiet": True,
-        "no_warnings": True,
-        "skip_download": not download,
+        "skip_download": True,
+        "extract_flat": "in_playlist",
+        "default_search": "ytsearch5",  # returns top 5 results
     }
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         try:
-            info = ydl.extract_info(url, download=download)
-            return info
+            results = ydl.extract_info(query, download=False)
+            videos = []
+            for entry in results.get("entries", []):
+                videos.append({
+                    "id": entry.get("id"),
+                    "title": entry.get("title"),
+                    "url": entry.get("url"),
+                })
+            return {"query": query, "results": videos}
         except Exception as e:
             raise HTTPException(status_code=400, detail=str(e))
 
-
-# -----------------------------
-# Search endpoint
-# -----------------------------
-@app.get("/search")
-async def search(query: str = Query(..., description="Search query")):
-    search_url = f"ytsearch10:{query}"  # top 10 results
-    info = ytdlp_extract_info(search_url)
-    results = []
-    for entry in info.get("entries", []):
-        results.append({
-            "id": entry.get("id"),
-            "title": entry.get("title"),
-            "url": entry.get("webpage_url"),
-            "duration": entry.get("duration"),
-            "thumbnail": entry.get("thumbnail")
-        })
-    return {"results": results}
-
-
-# -----------------------------
-# Video info endpoint
-# -----------------------------
-@app.get("/video")
-async def video_info(url: str = Query(..., description="YouTube video URL")):
-    info = ytdlp_extract_info(url)
-    formats = []
-    for f in info.get("formats", []):
-        formats.append({
-            "format_id": f.get("format_id"),
-            "ext": f.get("ext"),
-            "resolution": f.get("resolution") or f"{f.get('height')}p",
-            "url": f.get("url"),
-            "filesize": f.get("filesize")
-        })
-    return {
-        "id": info.get("id"),
-        "title": info.get("title"),
-        "description": info.get("description"),
-        "thumbnail": info.get("thumbnail"),
-        "duration": info.get("duration"),
-        "formats": formats
-    }
-
-
-# -----------------------------
-# Playlist info endpoint
-# -----------------------------
-@app.get("/playlist")
-async def playlist_info(url: str = Query(..., description="YouTube playlist URL")):
-    info = ytdlp_extract_info(url)
-    videos = []
-    for entry in info.get("entries", []):
-        videos.append({
-            "id": entry.get("id"),
-            "title": entry.get("title"),
-            "url": entry.get("webpage_url"),
-            "duration": entry.get("duration"),
-            "thumbnail": entry.get("thumbnail")
-        })
-    return {
-        "id": info.get("id"),
-        "title": info.get("title"),
-        "url": info.get("webpage_url"),
-        "videos": videos
-    }
+@app.get("/video/{video_id}")
+async def get_video(video_id: str):
+    """
+    Get detailed video info by video ID.
+    """
+    url = f"https://www.youtube.com/watch?v={video_id}"
+    return extract_video_info(url)
