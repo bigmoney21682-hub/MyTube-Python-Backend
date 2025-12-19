@@ -1,15 +1,15 @@
 # main.py
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
 import yt_dlp
+import json
 
 app = FastAPI()
 
-# ---------------- CORS ----------------
+# Allow your frontend origin
 origins = [
     "https://bigmoney21682-hub.github.io",
-    "http://localhost:5173",  # Vite dev server
+    "http://localhost:5173",  # local dev
 ]
 
 app.add_middleware(
@@ -20,110 +20,67 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ---------------- HELPERS ----------------
-def fetch_yt_info(url: str):
+# Path to your exported browser cookies file
+COOKIE_FILE = "cookies.txt"
+
+def fetch_ytdlp_data(url: str):
     ydl_opts = {
-        "quiet": True,
-        "skip_download": True,
-        "ignoreerrors": True,
+        "cookiefile": COOKIE_FILE,  # ✅ use cookies
         "format": "bestvideo+bestaudio/best",
+        "quiet": True,
+        "extract_flat": True,  # improves search speed for playlists
+        "simulate": True,       # no actual download
+        "forcejson": True,      # always return JSON
+        "skip_download": True,
     }
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        try:
-            return ydl.extract_info(url, download=False)
-        except Exception as e:
-            return {"error": str(e)}
 
-# ---------------- TRENDING ----------------
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+            return info
+    except yt_dlp.utils.DownloadError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
 @app.get("/trending")
-def trending(region: str = "US"):
-    """
-    Return trending videos. Currently using YouTube trending via yt-dlp.
-    """
-    url = f"https://www.youtube.com/feed/trending?gl={region}&hl=en"
-    info = fetch_yt_info(url)
-    if "error" in info:
-        return JSONResponse(status_code=500, content={"detail": info["error"]})
-
-    # Extract top-level videos
-    videos = []
-    if "entries" in info:
-        for v in info["entries"]:
-            if not v:
-                continue
-            videos.append({
-                "id": v.get("id"),
-                "title": v.get("title", "Untitled"),
-                "uploaderName": v.get("uploader", "Unknown"),
-                "views": v.get("view_count", 0),
-                "duration": v.get("duration"),
-                "thumbnail": v.get("thumbnail"),
-            })
+async def trending(region: str = "US"):
+    url = f"https://www.youtube.com/feed/trending?gl={region}"
+    data = fetch_ytdlp_data(url)
+    # flatten playlists into videos if needed
+    videos = data.get("entries", []) if isinstance(data, dict) else []
     return videos
 
-# ---------------- SEARCH ----------------
 @app.get("/search")
-def search(q: str):
-    """
-    Search YouTube using yt-dlp.
-    """
-    if not q.strip():
-        return []
-    url = f"ytsearch10:{q}"  # Top 10 results
-    info = fetch_yt_info(url)
-    if "error" in info:
-        return JSONResponse(status_code=500, content={"detail": info["error"]})
+async def search(q: str):
+    url = f"ytsearch10:{q}"  # fetch top 10 results
+    data = fetch_ytdlp_data(url)
+    videos = data.get("entries", []) if isinstance(data, dict) else []
+    return videos
 
-    results = []
-    if "entries" in info:
-        for v in info["entries"]:
-            if not v:
-                continue
-            results.append({
-                "id": v.get("id"),
-                "title": v.get("title", "Untitled"),
-                "uploaderName": v.get("uploader", "Unknown"),
-                "views": v.get("view_count", 0),
-                "duration": v.get("duration"),
-                "thumbnail": v.get("thumbnail"),
-            })
-    return results
-
-# ---------------- STREAMS ----------------
 @app.get("/streams/{video_id}")
-def streams(video_id: str):
-    """
-    Return all available streams for a video.
-    """
+async def streams(video_id: str):
     url = f"https://www.youtube.com/watch?v={video_id}"
-    info = fetch_yt_info(url)
-    if "error" in info:
-        return JSONResponse(status_code=500, content={"detail": info["error"]})
+    data = fetch_ytdlp_data(url)
 
-    streams = []
-    # Progressive MP4 first
-    for f in info.get("formats", []):
-        if f.get("url") and f.get("acodec") != "none" and f.get("vcodec") != "none":
-            streams.append({
+    video_streams = []
+    hls_url = None
+
+    formats = data.get("formats", [])
+    for f in formats:
+        if f.get("acodec") != "none" and f.get("vcodec") != "none":
+            video_streams.append({
+                "url": f.get("url"),
                 "format": f.get("ext"),
                 "videoOnly": f.get("vcodec") != "none" and f.get("acodec") == "none",
-                "audioOnly": f.get("acodec") != "none" and f.get("vcodec") == "none",
-                "url": f.get("url"),
-                "height": f.get("height"),
-                "width": f.get("width"),
-                "bitrate": f.get("tbr"),
+                "bitrate": f.get("tbr") or 0,
             })
-
-    # Fallback HLS
-    hls = next((f.get("url") for f in info.get("formats", []) if f.get("protocol") == "m3u8_native"), None)
+        if f.get("protocol") == "m3u8_native":
+            hls_url = f.get("url")
 
     return {
-        "id": info.get("id"),
-        "title": info.get("title", "Untitled"),
-        "uploaderName": info.get("uploader", "Unknown"),
-        "views": info.get("view_count", 0),
-        "duration": info.get("duration"),
-        "videoStreams": streams,
-        "hls": hls,
-        "relatedStreams": [],  # Can add related videos later
+        "title": data.get("title", "Placeholder"),
+        "uploaderName": data.get("uploader", "Unknown"),
+        "views": data.get("view_count", 0),
+        "videoStreams": video_streams,
+        "hls": hls_url,
+        "relatedStreams": [],  # optional: extend with related
     }
