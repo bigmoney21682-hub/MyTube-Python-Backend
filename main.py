@@ -26,6 +26,8 @@ def trending():
         cmd = [
             "yt-dlp",
             "--dump-json",
+            "--flat-playlist",
+            "--yes-playlist",
             "https://www.youtube.com/feed/trending"
         ]
 
@@ -37,17 +39,24 @@ def trending():
         )
 
         videos = []
+
         for line in proc.stdout:
             try:
                 data = json.loads(line)
+
+                video_id = data.get("id")
+                if not video_id:
+                    continue
+
                 videos.append({
-                    "id": data.get("id"),
+                    "id": video_id,
                     "title": data.get("title"),
-                    "thumbnail": f"https://i.ytimg.com/vi/{data.get('id')}/hqdefault.jpg",
+                    "thumbnail": f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg",
                     "uploaderName": data.get("uploader"),
                     "views": data.get("view_count"),
                     "duration": data.get("duration"),
                 })
+
             except Exception:
                 continue
 
