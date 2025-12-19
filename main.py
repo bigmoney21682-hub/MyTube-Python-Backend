@@ -1,19 +1,19 @@
 # File: main.py
 # Path: / (root of backend project)
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-import yt_dlp
-import json
-from typing import Optional
+from fastapi.responses import JSONResponse
+from yt_dlp import YoutubeDL
+import re
 
 app = FastAPI()
 
 # ---------------- CORS ----------------
 origins = [
     "https://bigmoney21682-hub.github.io",
-    "http://localhost",
     "http://localhost:5173",
+    "*",  # allow all for now; you can restrict later
 ]
 
 app.add_middleware(
@@ -24,111 +24,108 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ---------------- yt-dlp OPTIONS ----------------
-YDL_OPTS = {
-    "cookiefile": "cookies.txt",       # <-- Your cookies file in root
-    "ignoreerrors": True,
+# ---------------- YT-DLP OPTIONS ----------------
+ydl_opts_extract = {
     "quiet": True,
-    "format": "bestvideo+bestaudio/best",
-    "simulate": True,
-    "nocheckcertificate": True,
-    "extract_flat": "in_playlist",     # For trending/search lists
+    "extract_flat": True,  # Only metadata, no downloads
+    "skip_download": True,
 }
 
-# ---------------- HELPER ----------------
-def extract_info(url: str):
-    try:
-        with yt_dlp.YoutubeDL(YDL_OPTS) as ydl:
-            info = ydl.extract_info(url, download=False)
-            return info
-    except yt_dlp.utils.DownloadError as e:
-        raise HTTPException(status_code=500, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+ydl_opts_full = {
+    "quiet": True,
+}
 
-# ---------------- ENDPOINTS ----------------
+# ---------------- TRENDING ----------------
+TRENDING_PLAYLIST = "PLFgquLnL59alCl_2TQvOiD5Vgm1hCaGSI"  # Example curated playlist
+
 @app.get("/trending")
-def trending(region: Optional[str] = "US"):
-    """
-    Returns trending videos. region param is optional (default US)
-    """
-    url = "https://www.youtube.com/feed/trending"
+def trending():
+    """Return curated playlist videos as trending."""
     try:
-        info = extract_info(url)
-        if not info:
-            return []
-        # yt-dlp returns dict with 'entries' for playlists/lists
-        return info.get("entries", [])
-    except HTTPException as e:
-        raise HTTPException(status_code=500, detail=str(e.detail))
+        with YoutubeDL(ydl_opts_extract) as ydl:
+            info = ydl.extract_info(f"https://www.youtube.com/playlist?list={TRENDING_PLAYLIST}", download=False)
+            videos = info.get("entries", [])
+            result = []
+            for v in videos:
+                result.append({
+                    "id": v.get("id"),
+                    "title": v.get("title"),
+                    "uploaderName": v.get("uploader"),
+                    "thumbnail": v.get("thumbnail"),
+                    "views": v.get("view_count", 0),
+                    "duration": v.get("duration"),
+                })
+            return result
+    except Exception as e:
+        return JSONResponse(content={"detail": str(e)}, status_code=500)
 
+# ---------------- SEARCH ----------------
 @app.get("/search")
 def search(q: str):
-    """
-    Returns search results for query q
-    """
-    if not q:
-        raise HTTPException(status_code=400, detail="Missing search query")
+    """Search YouTube videos using yt-dlp."""
+    if not q.strip():
+        return []
 
-    url = f"ytsearch10:{q}"  # top 10 results
     try:
-        info = extract_info(url)
-        if not info:
-            return []
-        return info.get("entries", [])
-    except HTTPException as e:
-        raise HTTPException(status_code=500, detail=str(e.detail))
+        with YoutubeDL(ydl_opts_extract) as ydl:
+            info = ydl.extract_info(f"ytsearch10:{q}", download=False)
+            videos = info.get("entries", [])
+            result = []
+            for v in videos:
+                result.append({
+                    "id": v.get("id"),
+                    "title": v.get("title"),
+                    "uploaderName": v.get("uploader"),
+                    "thumbnail": v.get("thumbnail"),
+                    "views": v.get("view_count", 0),
+                    "duration": v.get("duration"),
+                })
+            return result
+    except Exception as e:
+        return JSONResponse(content={"detail": str(e)}, status_code=500)
 
+# ---------------- STREAMS ----------------
 @app.get("/streams/{video_id}")
 def streams(video_id: str):
-    """
-    Returns available streams for a given video
-    """
-    if not video_id:
-        raise HTTPException(status_code=400, detail="Missing video ID")
-
-    url = f"https://www.youtube.com/watch?v={video_id}"
+    """Return stream URLs for a specific video."""
     try:
-        info = extract_info(url)
-        if not info:
-            return {
-                "title": "Placeholder",
-                "uploaderName": "Unknown",
-                "views": 0,
-                "videoStreams": [],
-                "relatedStreams": [],
-            }
+        with YoutubeDL(ydl_opts_full) as ydl:
+            info = ydl.extract_info(f"https://www.youtube.com/watch?v={video_id}", download=False)
 
-        # Simplify streams for frontend consumption
-        video_streams = []
-        if "formats" in info:
-            for f in info["formats"]:
-                video_streams.append({
-                    "url": f.get("url"),
-                    "format": f.get("ext"),
-                    "bitrate": f.get("tbr"),
-                    "videoOnly": f.get("vcodec") != "none" and f.get("acodec") == "none",
+            video_streams = []
+            if "formats" in info:
+                for f in info["formats"]:
+                    video_streams.append({
+                        "format": f.get("ext"),
+                        "videoOnly": f.get("vcodec") != "none" and f.get("acodec") == "none",
+                        "url": f.get("url"),
+                        "bitrate": f.get("tbr", 0),
+                        "resolution": f.get("resolution") or f"{f.get('height', 0)}p"
+                    })
+
+            related_streams = []
+            for r in info.get("related_videos", []):
+                related_streams.append({
+                    "type": "stream",
+                    "id": r.get("id"),
+                    "title": r.get("title"),
+                    "url": f"https://www.youtube.com/watch?v={r.get('id')}",
+                    "thumbnail": r.get("thumbnail"),
+                    "uploaderName": r.get("uploader"),
+                    "views": r.get("view_count"),
+                    "duration": r.get("duration"),
                 })
 
-        related_streams = []
-        for e in info.get("related", []):
-            related_streams.append({
-                "title": e.get("title"),
-                "url": f"https://www.youtube.com/watch?v={e.get('id')}" if e.get("id") else None,
-                "thumbnail": e.get("thumbnails")[0]["url"] if e.get("thumbnails") else None,
-                "uploaderName": e.get("uploader"),
-                "views": e.get("view_count"),
-                "duration": e.get("duration"),
-                "type": "stream",
-            })
+            response = {
+                "title": info.get("title", "Placeholder"),
+                "uploaderName": info.get("uploader", "Unknown"),
+                "views": info.get("view_count", 0),
+                "videoStreams": video_streams,
+                "relatedStreams": related_streams,
+                "hls": info.get("url") if info.get("url", "").endswith(".m3u8") else None,
+            }
 
-        return {
-            "title": info.get("title", "Placeholder"),
-            "uploaderName": info.get("uploader", "Unknown"),
-            "views": info.get("view_count", 0),
-            "videoStreams": video_streams,
-            "relatedStreams": related_streams,
-        }
+            return response
 
-    except HTTPException as e:
-        raise HTTPException(status_code=500, detail=str(e.detail))
+    except Exception as e:
+        return JSONResponse(content={"detail": str(e)}, status_code=500)
