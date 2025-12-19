@@ -1,57 +1,77 @@
 # File: main.py
-# Path: / (root of backend project)
+# Path: /main.py
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-import yt_dlp
-from fastapi.responses import JSONResponse
+import httpx
 
-app = FastAPI(title="MyTube Backend")
+# -----------------------------
+# App
+# -----------------------------
+app = FastAPI()
 
-# -----------------------
-# CORS Configuration
-# -----------------------
-origins = [
-    "https://bigmoney21682-hub.github.io",  # Your frontend URL
-    "http://localhost:5173",                # Optional local dev
-]
-
+# -----------------------------
+# CORS (CRITICAL FIX)
+# -----------------------------
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    allow_origins=[
+        "https://bigmoney21682-hub.github.io",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# -----------------------
-# Routes
-# -----------------------
-@app.get("/trending")
-async def trending(region: str = "US"):
-    """
-    Fetch trending videos for a given region.
-    Returns JSON usable by the frontend.
-    """
-    try:
-        ydl_opts = {
-            "extract_flat": True,  # Only metadata, no video download
-            "skip_download": True,
-            "quiet": True,         # Hide verbose yt-dlp logs
-        }
+# -----------------------------
+# Upstream API (Piped)
+# -----------------------------
+PIPED_API = "https://pipedapi.kavin.rocks"
 
-        search_str = f"ytsearchdate{region}:trending"
+client = httpx.AsyncClient(timeout=20)
 
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(search_str, download=False)
-
-        return JSONResponse(content=info)
-    except Exception as e:
-        return JSONResponse(content={"error": str(e)})
-
-# -----------------------
+# -----------------------------
 # Health check
-# -----------------------
+# -----------------------------
 @app.get("/")
 async def root():
-    return {"status": "MyTube Backend is running"}
+    return {"status": "ok"}
+
+# -----------------------------
+# Trending
+# -----------------------------
+@app.get("/trending")
+async def trending(region: str = "US"):
+    try:
+        r = await client.get(f"{PIPED_API}/trending", params={"region": region})
+        r.raise_for_status()
+        return r.json()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# -----------------------------
+# Search
+# -----------------------------
+@app.get("/search")
+async def search(q: str, filter: str = "videos"):
+    try:
+        r = await client.get(
+            f"{PIPED_API}/search",
+            params={"q": q, "filter": filter},
+        )
+        r.raise_for_status()
+        return r.json()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# -----------------------------
+# Streams
+# -----------------------------
+@app.get("/streams/{video_id}")
+async def streams(video_id: str):
+    try:
+        r = await client.get(f"{PIPED_API}/streams/{video_id}")
+        r.raise_for_status()
+        return r.json()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
