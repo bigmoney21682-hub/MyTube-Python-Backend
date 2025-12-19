@@ -9,7 +9,7 @@ import os
 app = FastAPI()
 
 # --------------------------------------------------
-# CORS (required for GitHub Pages frontend)
+# CORS
 # --------------------------------------------------
 app.add_middleware(
     CORSMiddleware,
@@ -33,22 +33,20 @@ def root():
     return {"status": "ok"}
 
 # --------------------------------------------------
-# TRENDING (RESTORED — SAFE, NO COOKIES)
+# TRENDING (curated, stable playlist)
 # --------------------------------------------------
 @app.get("/trending")
-def trending(region: str = "US"):
-    """
-    Returns trending-style videos using a curated playlist.
-    Does NOT require cookies.
-    Keeps Home.jsx working.
-    """
-
-    PLAYLIST_URL = "https://www.youtube.com/playlist?list=PLFgquLnL59amEA43C0R3G1-7x9X4XxkC8"
+def trending():
+    PLAYLIST_URL = (
+        "https://www.youtube.com/playlist"
+        "?list=PLrEnWoR732-BHrPp_Pm8_VleD68f9s14-"
+    )
 
     cmd = [
         "yt-dlp",
-        "--flat-playlist",
+        "--cookies", COOKIES_PATH,
         "--dump-single-json",
+        "--flat-playlist",
         PLAYLIST_URL,
     ]
 
@@ -60,32 +58,29 @@ def trending(region: str = "US"):
     )
 
     if result.returncode != 0:
-        raise HTTPException(status_code=500, detail=result.stderr)
+        raise HTTPException(
+            status_code=500,
+            detail=result.stderr.strip()
+        )
 
     data = json.loads(result.stdout)
 
     videos = []
-    for e in data.get("entries", []):
+    for entry in data.get("entries", []):
         videos.append({
-            "id": e.get("id"),
-            "title": e.get("title"),
-            "uploaderName": e.get("uploader"),
-            "thumbnail": f"https://i.ytimg.com/vi/{e.get('id')}/hqdefault.jpg",
-            "views": None,
-            "duration": None,
+            "id": entry.get("id"),
+            "title": entry.get("title"),
+            "author": entry.get("uploader"),
+            "thumbnail": f"https://i.ytimg.com/vi/{entry.get('id')}/hqdefault.jpg"
         })
 
     return videos
 
 # --------------------------------------------------
-# STREAMS (yt-dlp + cookies)
+# STREAMS (unchanged, working)
 # --------------------------------------------------
 @app.get("/streams/{video_id}")
 def get_streams(video_id: str):
-    """
-    Returns playable stream data for a YouTube video.
-    Uses yt-dlp with cookies.txt to bypass bot checks.
-    """
 
     if not os.path.exists(COOKIES_PATH):
         raise HTTPException(
@@ -111,21 +106,21 @@ def get_streams(video_id: str):
     if result.returncode != 0:
         raise HTTPException(
             status_code=500,
-            detail=f"yt-dlp error: {result.stderr.strip()}"
+            detail=result.stderr.strip()
         )
 
     data = json.loads(result.stdout)
 
+    formats = data.get("formats", [])
     video_streams = []
     audio_streams = []
 
-    for f in data.get("formats", []):
+    for f in formats:
         if f.get("vcodec") != "none":
             video_streams.append({
                 "url": f.get("url"),
                 "mimeType": f.get("ext"),
                 "height": f.get("height"),
-                "fps": f.get("fps"),
             })
         elif f.get("acodec") != "none":
             audio_streams.append({
