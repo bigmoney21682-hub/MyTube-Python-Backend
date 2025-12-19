@@ -1,15 +1,18 @@
 # File: main.py
-from fastapi import FastAPI
+# Path: / (root of backend project)
+
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
-from yt_dlp import YoutubeDL
-import os
+import yt_dlp
+import json
+from typing import Optional
 
 app = FastAPI()
 
 # ---------------- CORS ----------------
 origins = [
-    "https://bigmoney21682-hub.github.io",  # your frontend
+    "https://bigmoney21682-hub.github.io",
+    "http://localhost",
     "http://localhost:5173",
 ]
 
@@ -21,112 +24,111 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ---------------- yt-dlp Options ----------------
-COOKIES_FILE = "cookies.txt"  # must be in same folder as main.py
+# ---------------- yt-dlp OPTIONS ----------------
 YDL_OPTS = {
+    "cookiefile": "cookies.txt",       # <-- Your cookies file in root
+    "ignoreerrors": True,
     "quiet": True,
-    "nocheckcertificate": True,
-    "extract_flat": False,
-    "cookiefile": COOKIES_FILE,
-    "skip_download": True,
+    "format": "bestvideo+bestaudio/best",
     "simulate": True,
+    "nocheckcertificate": True,
+    "extract_flat": "in_playlist",     # For trending/search lists
 }
 
-# ---------------- SEARCH ----------------
-@app.get("/search")
-async def search(q: str):
-    url = f"ytsearch20:{q}"
+# ---------------- HELPER ----------------
+def extract_info(url: str):
     try:
-        with YoutubeDL(YDL_OPTS) as ydl:
-            result = ydl.extract_info(url, download=False)
-            videos = [
-                {
-                    "id": v.get("id"),
-                    "title": v.get("title"),
-                    "uploaderName": v.get("uploader") or "Unknown",
-                    "views": v.get("view_count") or 0,
-                    "duration": v.get("duration"),
-                    "thumbnail": v.get("thumbnail"),
-                }
-                for v in result.get("entries", [])
-                if v.get("id")
-            ]
-        return JSONResponse(content=videos)
+        with yt_dlp.YoutubeDL(YDL_OPTS) as ydl:
+            info = ydl.extract_info(url, download=False)
+            return info
+    except yt_dlp.utils.DownloadError as e:
+        raise HTTPException(status_code=500, detail=str(e))
     except Exception as e:
-        return JSONResponse(status_code=500, content={"detail": str(e)})
+        raise HTTPException(status_code=500, detail=str(e))
 
-# ---------------- TRENDING ----------------
+# ---------------- ENDPOINTS ----------------
 @app.get("/trending")
-async def trending(region: str = "US"):
-    # Fallback using search 'trending'
-    url = "ytsearch20:trending"
+def trending(region: Optional[str] = "US"):
+    """
+    Returns trending videos. region param is optional (default US)
+    """
+    url = "https://www.youtube.com/feed/trending"
     try:
-        with YoutubeDL(YDL_OPTS) as ydl:
-            result = ydl.extract_info(url, download=False)
-            videos = [
-                {
-                    "id": v.get("id"),
-                    "title": v.get("title"),
-                    "uploaderName": v.get("uploader") or "Unknown",
-                    "views": v.get("view_count") or 0,
-                    "duration": v.get("duration"),
-                    "thumbnail": v.get("thumbnail"),
-                }
-                for v in result.get("entries", [])
-                if v.get("id")
-            ]
-        return JSONResponse(content=videos)
-    except Exception as e:
-        return JSONResponse(status_code=500, content={"detail": f"ERROR: {str(e)}"})
+        info = extract_info(url)
+        if not info:
+            return []
+        # yt-dlp returns dict with 'entries' for playlists/lists
+        return info.get("entries", [])
+    except HTTPException as e:
+        raise HTTPException(status_code=500, detail=str(e.detail))
 
-# ---------------- STREAMS ----------------
+@app.get("/search")
+def search(q: str):
+    """
+    Returns search results for query q
+    """
+    if not q:
+        raise HTTPException(status_code=400, detail="Missing search query")
+
+    url = f"ytsearch10:{q}"  # top 10 results
+    try:
+        info = extract_info(url)
+        if not info:
+            return []
+        return info.get("entries", [])
+    except HTTPException as e:
+        raise HTTPException(status_code=500, detail=str(e.detail))
+
 @app.get("/streams/{video_id}")
-async def streams(video_id: str):
+def streams(video_id: str):
+    """
+    Returns available streams for a given video
+    """
+    if not video_id:
+        raise HTTPException(status_code=400, detail="Missing video ID")
+
     url = f"https://www.youtube.com/watch?v={video_id}"
     try:
-        with YoutubeDL(YDL_OPTS) as ydl:
-            info = ydl.extract_info(url, download=False)
-            # Extract video formats
-            video_streams = []
-            hls_url = None
-            for f in info.get("formats", []):
-                stream = {
+        info = extract_info(url)
+        if not info:
+            return {
+                "title": "Placeholder",
+                "uploaderName": "Unknown",
+                "views": 0,
+                "videoStreams": [],
+                "relatedStreams": [],
+            }
+
+        # Simplify streams for frontend consumption
+        video_streams = []
+        if "formats" in info:
+            for f in info["formats"]:
+                video_streams.append({
                     "url": f.get("url"),
                     "format": f.get("ext"),
+                    "bitrate": f.get("tbr"),
                     "videoOnly": f.get("vcodec") != "none" and f.get("acodec") == "none",
-                    "audioOnly": f.get("acodec") != "none" and f.get("vcodec") == "none",
-                    "bitrate": f.get("tbr") or 0,
-                }
-                video_streams.append(stream)
-                if f.get("protocol") == "m3u8_native" and not hls_url:
-                    hls_url = f.get("url")
-
-            related = []
-            for entry in info.get("entries", []) or []:
-                related.append({
-                    "id": entry.get("id"),
-                    "title": entry.get("title"),
-                    "url": f"https://www.youtube.com/watch?v={entry.get('id')}",
-                    "thumbnail": entry.get("thumbnail"),
-                    "uploaderName": entry.get("uploader"),
-                    "views": entry.get("view_count"),
-                    "duration": entry.get("duration"),
-                    "type": "stream"
                 })
 
-        return JSONResponse(content={
-            "title": info.get("title") or "Placeholder",
-            "uploaderName": info.get("uploader") or "Unknown",
-            "views": info.get("view_count") or 0,
+        related_streams = []
+        for e in info.get("related", []):
+            related_streams.append({
+                "title": e.get("title"),
+                "url": f"https://www.youtube.com/watch?v={e.get('id')}" if e.get("id") else None,
+                "thumbnail": e.get("thumbnails")[0]["url"] if e.get("thumbnails") else None,
+                "uploaderName": e.get("uploader"),
+                "views": e.get("view_count"),
+                "duration": e.get("duration"),
+                "type": "stream",
+            })
+
+        return {
+            "title": info.get("title", "Placeholder"),
+            "uploaderName": info.get("uploader", "Unknown"),
+            "views": info.get("view_count", 0),
             "videoStreams": video_streams,
-            "hls": hls_url,
-            "relatedStreams": related
-        })
+            "relatedStreams": related_streams,
+        }
 
-    except Exception as e:
-        return JSONResponse(status_code=500, content={"detail": str(e)})
-
-# ---------------- ROOT ----------------
-@app.get("/")
-async def root():
-    return {"status": "ok"}
+    except HTTPException as e:
+        raise HTTPException(status_code=500, detail=str(e.detail))
