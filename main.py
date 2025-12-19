@@ -1,19 +1,19 @@
 # File: main.py
 # Path: / (root of backend project)
 
-from fastapi import FastAPI, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import yt_dlp
-import os
+from fastapi.responses import JSONResponse
 
-app = FastAPI()
+app = FastAPI(title="MyTube Backend")
 
-# -----------------------------
-# CORS: allow your frontend
-# -----------------------------
+# -----------------------
+# CORS Configuration
+# -----------------------
 origins = [
-    "https://bigmoney21682-hub.github.io"
+    "https://bigmoney21682-hub.github.io",  # Your frontend URL
+    "http://localhost:5173",                # Optional local dev
 ]
 
 app.add_middleware(
@@ -24,30 +24,34 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# -----------------------------
-# API route example
-# -----------------------------
-@app.get("/api/trending")
+# -----------------------
+# Routes
+# -----------------------
+@app.get("/trending")
 async def trending(region: str = "US"):
+    """
+    Fetch trending videos for a given region.
+    Returns JSON usable by the frontend.
+    """
     try:
-        # Example using yt-dlp to get trending videos (placeholder)
-        ydl_opts = {"extract_flat": True}
-        url = f"https://www.youtube.com/feed/trending?gl={region}"
+        ydl_opts = {
+            "extract_flat": True,  # Only metadata, no video download
+            "skip_download": True,
+            "quiet": True,         # Hide verbose yt-dlp logs
+        }
+
+        search_str = f"ytsearchdate{region}:trending"
+
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
+            info = ydl.extract_info(search_str, download=False)
+
         return JSONResponse(content=info)
     except Exception as e:
-        return JSONResponse(content={"error": str(e)}, status_code=500)
+        return JSONResponse(content={"error": str(e)})
 
-# -----------------------------
-# Serve frontend files
-# -----------------------------
-frontend_path = os.path.dirname(__file__)
-
-@app.get("/{full_path:path}")
-async def serve_frontend(full_path: str, request: Request):
-    requested_file = os.path.join(frontend_path, full_path)
-    if os.path.isfile(requested_file):
-        return FileResponse(requested_file)
-    # Fallback: serve index.html for SPA
-    return FileResponse(os.path.join(frontend_path, "index.html"))
+# -----------------------
+# Health check
+# -----------------------
+@app.get("/")
+async def root():
+    return {"status": "MyTube Backend is running"}
