@@ -1,15 +1,16 @@
-# backend/main.py
+# File: /main.py
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from yt_dlp import YoutubeDL
+import subprocess
+import json
 import os
 
 app = FastAPI()
 
-# -------------------------
-# CORS (unchanged)
-# -------------------------
+# --------------------------------------------------
+# CORS (required for GitHub Pages frontend)
+# --------------------------------------------------
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -18,69 +19,92 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# -------------------------
-# CONSTANTS
-# -------------------------
-COOKIES_PATH = os.path.join(os.getcwd(), "cookies.txt")
+# --------------------------------------------------
+# Paths
+# --------------------------------------------------
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+COOKIES_PATH = os.path.join(BASE_DIR, "cookies.txt")
 
-if not os.path.exists(COOKIES_PATH):
-    print("⚠️ cookies.txt NOT FOUND at backend root")
+# --------------------------------------------------
+# Health check
+# --------------------------------------------------
+@app.get("/")
+def root():
+    return {"status": "ok"}
 
-# -------------------------
-# STREAM ENDPOINT
-# -------------------------
+# --------------------------------------------------
+# STREAMS (yt-dlp + cookies)
+# --------------------------------------------------
 @app.get("/streams/{video_id}")
 def get_streams(video_id: str):
     """
-    Returns playable streams for a YouTube video.
-    Cookies are REQUIRED to avoid bot verification.
+    Returns playable stream data for a YouTube video.
+    Uses yt-dlp with cookies.txt to bypass bot checks.
     """
 
-    ydl_opts = {
-        "quiet": True,
-        "no_warnings": True,
-        "skip_download": True,
-
-        # ✅ THIS IS THE FIX
-        "cookiefile": COOKIES_PATH,
-
-        # Safer format selection
-        "format": "bestvideo+bestaudio/best",
-
-        # Prevent throttling issues
-        "noplaylist": True,
-        "extract_flat": False,
-    }
-
-    try:
-        with YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(
-                f"https://www.youtube.com/watch?v={video_id}",
-                download=False,
-            )
-
-        formats = info.get("formats", [])
-
-        streams = []
-        for f in formats:
-            if f.get("url") and f.get("vcodec") != "none":
-                streams.append({
-                    "url": f["url"],
-                    "mimeType": f.get("ext"),
-                    "quality": f.get("format_note") or f.get("resolution"),
-                })
-
-        if not streams:
-            raise HTTPException(status_code=404, detail="No playable streams found")
-
-        return {
-            "id": video_id,
-            "title": info.get("title"),
-            "streams": streams,
-        }
-
-    except Exception as e:
+    if not os.path.exists(COOKIES_PATH):
         raise HTTPException(
             status_code=500,
-            detail=f"yt-dlp error: {str(e)}"
+            detail="cookies.txt not found in backend root"
         )
+
+    cmd = [
+        "yt-dlp",
+        "--cookies", COOKIES_PATH,          # 🔑 THIS IS THE FIX
+        "--no-playlist",
+        "--dump-single-json",
+        f"https://www.youtube.com/watch?v={video_id}",
+    ]
+
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    if result.returncode != 0:
+        raise HTTPException(
+            status_code=500,
+            detail=f"yt-dlp error: {result.stderr.strip()}"
+        )
+
+    try:
+        data = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to parse yt-dlp output"
+        )
+
+    # Extract usable streams
+    formats = data.get("formats", [])
+
+    video_streams = []
+    audio_streams = []
+
+    for f in formats:
+        if f.get("vcodec") != "none":
+            video_streams.append({
+                "url": f.get("url"),
+                "mimeType": f.get("ext"),
+                "height": f.get("height"),
+                "fps": f.get("fps"),
+            })
+        elif f.get("acodec") != "none":
+            audio_streams.append({
+                "url": f.get("url"),
+                "mimeType": f.get("ext"),
+                "abr": f.get("abr"),
+            })
+
+    return {
+        "id": video_id,
+        "title": data.get("title"),
+        "uploader": data.get("uploader"),
+        "videoStreams": video_streams,
+        "audioStreams": audio_streams,
+    }
