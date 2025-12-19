@@ -33,6 +33,51 @@ def root():
     return {"status": "ok"}
 
 # --------------------------------------------------
+# TRENDING (RESTORED — SAFE, NO COOKIES)
+# --------------------------------------------------
+@app.get("/trending")
+def trending(region: str = "US"):
+    """
+    Returns trending-style videos using a curated playlist.
+    Does NOT require cookies.
+    Keeps Home.jsx working.
+    """
+
+    PLAYLIST_URL = "https://www.youtube.com/playlist?list=PLFgquLnL59amEA43C0R3G1-7x9X4XxkC8"
+
+    cmd = [
+        "yt-dlp",
+        "--flat-playlist",
+        "--dump-single-json",
+        PLAYLIST_URL,
+    ]
+
+    result = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        timeout=30
+    )
+
+    if result.returncode != 0:
+        raise HTTPException(status_code=500, detail=result.stderr)
+
+    data = json.loads(result.stdout)
+
+    videos = []
+    for e in data.get("entries", []):
+        videos.append({
+            "id": e.get("id"),
+            "title": e.get("title"),
+            "uploaderName": e.get("uploader"),
+            "thumbnail": f"https://i.ytimg.com/vi/{e.get('id')}/hqdefault.jpg",
+            "views": None,
+            "duration": None,
+        })
+
+    return videos
+
+# --------------------------------------------------
 # STREAMS (yt-dlp + cookies)
 # --------------------------------------------------
 @app.get("/streams/{video_id}")
@@ -50,21 +95,18 @@ def get_streams(video_id: str):
 
     cmd = [
         "yt-dlp",
-        "--cookies", COOKIES_PATH,          # 🔑 THIS IS THE FIX
+        "--cookies", COOKIES_PATH,
         "--no-playlist",
         "--dump-single-json",
         f"https://www.youtube.com/watch?v={video_id}",
     ]
 
-    try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=30
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    result = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        timeout=30
+    )
 
     if result.returncode != 0:
         raise HTTPException(
@@ -72,21 +114,12 @@ def get_streams(video_id: str):
             detail=f"yt-dlp error: {result.stderr.strip()}"
         )
 
-    try:
-        data = json.loads(result.stdout)
-    except json.JSONDecodeError:
-        raise HTTPException(
-            status_code=500,
-            detail="Failed to parse yt-dlp output"
-        )
-
-    # Extract usable streams
-    formats = data.get("formats", [])
+    data = json.loads(result.stdout)
 
     video_streams = []
     audio_streams = []
 
-    for f in formats:
+    for f in data.get("formats", []):
         if f.get("vcodec") != "none":
             video_streams.append({
                 "url": f.get("url"),
