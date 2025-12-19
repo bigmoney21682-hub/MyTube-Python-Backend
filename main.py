@@ -1,19 +1,17 @@
 # File: main.py
 # Path: / (root of your backend project)
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-import yt_dlp
+import httpx
 
-app = FastAPI(title="MyTube Backend")
+app = FastAPI()
 
-# ----------------------------
-# CORS Configuration
-# ----------------------------
+# -----------------------------
+# CORS Setup
+# -----------------------------
 origins = [
-    "https://bigmoney21682-hub.github.io",
-    "http://localhost:5173"  # Optional: for local dev
+    "https://bigmoney21682-hub.github.io",  # <- Your frontend
 ]
 
 app.add_middleware(
@@ -24,39 +22,44 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ----------------------------
-# Models
-# ----------------------------
-class VideoRequest(BaseModel):
-    url: str
+# -----------------------------
+# Health Check
+# -----------------------------
+@app.get("/ping")
+def ping():
+    return {"message": "pong"}
 
-# ----------------------------
-# Routes
-# ----------------------------
-@app.get("/")
-async def root():
-    return {"message": "Welcome to MyTube Backend!"}
+# -----------------------------
+# Piped API Proxy Endpoints
+# -----------------------------
+PIPED_BASE = "https://pipedapi.kavin.rocks"
 
+@app.get("/trending")
+async def trending(region: str = Query("US")):
+    """
+    Proxy trending videos from Piped API
+    """
+    async with httpx.AsyncClient() as client:
+        response = await client.get(f"{PIPED_BASE}/trending?region={region}")
+        response.raise_for_status()
+        return response.json()
 
-@app.post("/download/")
-async def download_video(request: VideoRequest):
-    try:
-        ydl_opts = {
-            "format": "best",
-            "noplaylist": True
-        }
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(request.url, download=False)
-        return {
-            "title": info.get("title"),
-            "id": info.get("id"),
-            "url": info.get("webpage_url"),
-            "duration": info.get("duration")
-        }
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+@app.get("/search")
+async def search(query: str, region: str = Query("US")):
+    """
+    Proxy search results from Piped API
+    """
+    async with httpx.AsyncClient() as client:
+        response = await client.get(f"{PIPED_BASE}/search", params={"q": query, "region": region})
+        response.raise_for_status()
+        return response.json()
 
-
-@app.get("/health/")
-async def health_check():
-    return {"status": "ok"}
+@app.get("/video")
+async def video(id: str):
+    """
+    Proxy video details from Piped API
+    """
+    async with httpx.AsyncClient() as client:
+        response = await client.get(f"{PIPED_BASE}/video/{id}")
+        response.raise_for_status()
+        return response.json()
