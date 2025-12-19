@@ -33,7 +33,7 @@ def root():
     return {"status": "ok"}
 
 # --------------------------------------------------
-# TRENDING (curated, stable playlist)
+# TRENDING (unchanged, working)
 # --------------------------------------------------
 @app.get("/trending")
 def trending():
@@ -77,7 +77,7 @@ def trending():
     return videos
 
 # --------------------------------------------------
-# STREAMS (unchanged, working)
+# STREAMS (FIXED: Android client, no JS, no bot check)
 # --------------------------------------------------
 @app.get("/streams/{video_id}")
 def get_streams(video_id: str):
@@ -91,6 +91,7 @@ def get_streams(video_id: str):
     cmd = [
         "yt-dlp",
         "--cookies", COOKIES_PATH,
+        "--extractor-args", "youtube:player_client=android",  # ✅ FIX
         "--no-playlist",
         "--dump-single-json",
         f"https://www.youtube.com/watch?v={video_id}",
