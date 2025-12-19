@@ -1,5 +1,7 @@
+# backend/requirements.txt
+
 fastapi==0.113.0
 uvicorn==0.24.0
 pydantic==2.8.1
 python-multipart==0.0.6
-typing-extensions==4.9.0
+yt-dlp
