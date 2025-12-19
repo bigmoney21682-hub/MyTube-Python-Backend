@@ -1,13 +1,17 @@
 # File: main.py
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-import yt_dlp
+from fastapi.responses import JSONResponse
+from yt_dlp import YoutubeDL
+import os
 
-app = FastAPI()
+app = FastAPI(title="MyTube Backend")
 
-# ✅ Allow your frontend origin
+# ---------------- CORS ----------------
 origins = [
     "https://bigmoney21682-hub.github.io",
+    "http://localhost",
+    "http://localhost:5173",
 ]
 
 app.add_middleware(
@@ -18,67 +22,126 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ---------------- HELPERS ----------------
-def get_ydl_options():
-    return {
-        "cookies": "cookies.txt",  # <-- your cookies file in backend root
-        "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/mp4",
-        "noplaylist": True,
-        "quiet": True,
-    }
+# ---------------- Cookies ----------------
+COOKIE_FILE = "cookies.txt"  # must be in backend root
 
-# ---------------- TRENDING ----------------
+if not os.path.exists(COOKIE_FILE):
+    print("⚠️ Warning: cookies.txt not found. Trending may fail.")
+
+# ---------------- YT-DLP Options ----------------
+YDL_OPTS = {
+    "quiet": True,
+    "no_warnings": True,
+    "cookiefile": COOKIE_FILE,
+    "format": "bestvideo+bestaudio/best",
+    "noplaylist": True,
+}
+
+YDL_OPTS_TRENDING = {
+    **YDL_OPTS,
+    "noplaylist": False,
+}
+
+# ---------------- ROUTES ----------------
 @app.get("/trending")
 async def trending(region: str = "US"):
     url = f"https://www.youtube.com/feed/trending?gl={region}"
     try:
-        with yt_dlp.YoutubeDL(get_ydl_options()) as ydl:
-            info = ydl.extract_info(url, download=False)
-        return info.get("entries", [])
+        with YoutubeDL(YDL_OPTS_TRENDING) as ydl:
+            result = ydl.extract_info(url, download=False)
+            if "entries" in result:
+                videos = [
+                    {
+                        "id": v.get("id"),
+                        "title": v.get("title"),
+                        "uploaderName": v.get("uploader") or v.get("channel") or "Unknown",
+                        "views": v.get("view_count") or 0,
+                        "duration": v.get("duration"),
+                        "thumbnail": v.get("thumbnail"),
+                    }
+                    for v in result["entries"]
+                    if v.get("id")
+                ]
+            else:
+                videos = []
+        return JSONResponse(content=videos)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        return JSONResponse(
+            status_code=500,
+            content={"detail": f"ERROR: {str(e)}"},
+        )
 
-# ---------------- SEARCH ----------------
 @app.get("/search")
 async def search(q: str):
     if not q.strip():
-        return []
-    url = f"https://www.youtube.com/results?search_query={q}"
+        raise HTTPException(status_code=400, detail="Query missing")
+    url = f"ytsearch10:{q}"
     try:
-        with yt_dlp.YoutubeDL(get_ydl_options()) as ydl:
-            info = ydl.extract_info(url, download=False)
-        return info.get("entries", [])
+        with YoutubeDL(YDL_OPTS) as ydl:
+            result = ydl.extract_info(url, download=False)
+            items = [
+                {
+                    "id": v.get("id"),
+                    "title": v.get("title"),
+                    "uploaderName": v.get("uploader") or v.get("channel") or "Unknown",
+                    "views": v.get("view_count") or 0,
+                    "duration": v.get("duration"),
+                    "thumbnail": v.get("thumbnail"),
+                }
+                for v in result.get("entries", [])
+                if v.get("id")
+            ]
+        return JSONResponse(content={"items": items})
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        return JSONResponse(
+            status_code=500,
+            content={"detail": f"ERROR: {str(e)}"},
+        )
 
-# ---------------- STREAMS ----------------
 @app.get("/streams/{video_id}")
 async def streams(video_id: str):
     url = f"https://www.youtube.com/watch?v={video_id}"
     try:
-        with yt_dlp.YoutubeDL(get_ydl_options()) as ydl:
+        with YoutubeDL(YDL_OPTS) as ydl:
             info = ydl.extract_info(url, download=False)
-
-        return {
-            "title": info.get("title", "Unknown"),
-            "uploaderName": info.get("uploader", "Unknown"),
-            "views": info.get("view_count", 0),
-            "videoStreams": [
+            video_streams = [
                 {
-                    "url": f["url"],
+                    "url": f"{f['url']}",
                     "format": f.get("ext"),
-                    "videoOnly": f.get("vcodec") != "none",
-                    "audioOnly": f.get("acodec") != "none",
-                    "bitrate": f.get("tbr"),
+                    "videoOnly": f.get("vcodec") != "none" and f.get("acodec") == "none",
+                    "audioOnly": f.get("acodec") != "none" and f.get("vcodec") == "none",
+                    "bitrate": f.get("tbr") or 0,
                 }
                 for f in info.get("formats", [])
-            ],
-            "relatedStreams": info.get("related_videos", []),
-        }
+            ]
+            related = [
+                {
+                    "title": v.get("title"),
+                    "url": f"https://www.youtube.com/watch?v={v.get('id')}",
+                    "thumbnail": v.get("thumbnail"),
+                    "uploaderName": v.get("uploader") or "Unknown",
+                    "views": v.get("view_count") or 0,
+                    "duration": v.get("duration"),
+                    "type": "stream",
+                }
+                for v in info.get("related_videos", [])
+            ]
+            response = {
+                "title": info.get("title") or "Placeholder",
+                "uploaderName": info.get("uploader") or "Unknown",
+                "views": info.get("view_count") or 0,
+                "videoStreams": video_streams,
+                "relatedStreams": related,
+                "hls": info.get("url") if info.get("url").endswith(".m3u8") else None,
+            }
+        return JSONResponse(content=response)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        return JSONResponse(
+            status_code=500,
+            content={"detail": f"ERROR: {str(e)}"},
+        )
 
-# ---------------- HEALTH CHECK ----------------
-@app.get("/")
-async def root():
-    return {"status": "Backend running"}
+# ---------------- RUN ----------------
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
